@@ -1,1 +1,22 @@
-__pycache__/\n*.pyc\n.env\n/static/\n*.stl\n*.obj\n*.dxf
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.log
+
+# Virtual environment
+venv/
+
+# OS generated
+.DS_Store
+
+# Sensitive/temporary data
+.env
+outputs/
+downloads/
+temp/
+*.depth.png
+*.stl
+*.obj
+*.dxf
+
