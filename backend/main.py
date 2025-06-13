@@ -1,138 +1,146 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import shutil
-import numpy as np
-import cv2
-import uuid
+import shutil, uuid
+import numpy as np, cv2
 from PIL import Image, ImageOps
 
 from backend.utils.image_processing import convert_to_grayscale, remove_background
-from backend.utils.depthmap_tools import generate_depth_map
 from backend.utils.dxf_exporter import save_as_dxf
 from backend.utils.stl_exporter import save_as_stl
 from backend.utils.obj_exporter import OBJExporter
 
+# ────────────────────────────────────────────────
+# app & CORS
+# ────────────────────────────────────────────────
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],           # ← in prod, restrict this!
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ────────────────────────────────────────────────
+# mounts & paths
+# ────────────────────────────────────────────────
+app.mount("/static",   StaticFiles(directory="static"),   name="static")
 app.mount("/frontend", StaticFiles(directory="frontend", html=True), name="frontend")
 
-UPLOAD_DIR = Path("static/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR  = Path("static/uploads");  UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PREV_DIR    = Path("static/previews"); PREV_DIR.mkdir(parents=True, exist_ok=True)
 
+# ────────────────────────────────────────────────
+# helpers
+# ────────────────────────────────────────────────
+def generate_depth_map(img_path: Path, res: int = 512) -> np.ndarray:
+    img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (res, res), interpolation=cv2.INTER_AREA)
+    blur = cv2.GaussianBlur(img, (5, 5), 0)
+    return cv2.normalize(blur, None, 0.0, 1.0, cv2.NORM_MINMAX)
 
+def depth_to_points(depth: np.ndarray) -> np.ndarray:
+    h, w = depth.shape
+    return np.array([[x, y, float(depth[y, x])] for y in range(h) for x in range(w)], np.float32)
+
+def grid_faces(h: int, w: int):
+    f = []
+    for y in range(h - 1):
+        for x in range(w - 1):
+            i = y * w + x
+            f += [[i, i+1, i+w], [i+1, i+w+1, i+w]]
+    return f
+
+# ────────────────────────────────────────────────
+# root – serve SPA
+# ────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
-def read_root():
-    html_path = Path("frontend/index.html")
-    if not html_path.exists():
-        return HTMLResponse(content="<h1>Frontend not found</h1>", status_code=404)
-    return HTMLResponse(content=html_path.read_text(), status_code=200)
+def spa():
+    return HTMLResponse(Path("frontend/index.html").read_text(), 200)
 
-
-def depth_map_to_pointcloud(depth_map: np.ndarray) -> np.ndarray:
-    """
-    Convert 2D depth map to 3D point cloud (x, y, depth).
-    """
-    h, w = depth_map.shape
-    points = []
-    for y in range(h):
-        for x in range(w):
-            z = depth_map[y, x]
-            if z > 0:
-                points.append([float(x), float(y), float(z)])
-    return np.array(points, dtype=np.float32)
-
-
-@app.post("/upload-and-export/{format}/")
-async def upload_and_export_format(format: str, file: UploadFile = File(...)):
-    format = format.lower()
-    if format not in {"dxf", "stl", "obj"}:
-        raise HTTPException(status_code=400, detail="Unsupported format. Use 'dxf', 'stl', or 'obj'.")
-
-    file_path = UPLOAD_DIR / file.filename
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # Image preprocessing
-    gray_path = convert_to_grayscale(file_path)
-    bg_removed_path = remove_background(gray_path)
-
-    # Generate depth map and convert to 3D point cloud
-    depth_map = generate_depth_map(bg_removed_path)
-    points = depth_map_to_pointcloud(depth_map)
-
-    output_path = UPLOAD_DIR / f"{file_path.stem}.{format}"
-
-    try:
-        if format == "dxf":
-            save_as_dxf(points, output_path)
-        elif format == "stl":
-            if len(points) < 3:
-                raise ValueError("Not enough points to generate STL mesh.")
-            faces = [[i, (i + 1) % len(points), (i + 2) % len(points)] for i in range(0, len(points) - 2)]
-            save_as_stl(points, faces, output_path)
-        elif format == "obj":
-            if len(points) < 3:
-                raise ValueError("Not enough points to generate OBJ mesh.")
-            faces = [(i + 1, i + 2, i + 3) for i in range(0, len(points) - 3, 3)]
-            exporter = OBJExporter(vertices=points.tolist(), faces=faces)
-            exporter.save(str(output_path))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export: {str(e)}")
-
-    return {
-        "message": f"{format.upper()} file generated successfully",
-        "file": f"/download/{output_path.name}"
-    }
-
-
-@app.get("/download/{filename}")
-def download_file(filename: str):
-    file_path = UPLOAD_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found.")
-    return FileResponse(path=file_path, filename=filename)
-
-
+# ────────────────────────────────────────────────
+# preview endpoint
+# ────────────────────────────────────────────────
 @app.post("/preview-depthmap")
-async def preview_depthmap(
+async def preview(
     file: UploadFile = File(...),
-    bg_color: str = Query("white", regex="^(white|black)$")
+    bg_color: str = Query("white", regex="^(white|black)$"),
+    brightness: int = Query(0), gamma: float = Query(1.0),
+    res: int = Query(512, ge=128, le=1024),
 ):
-    """
-    Generate grayscale + depth map preview for images with transparency.
-    Query param: bg_color=white or black
-    """
     try:
-        input_path = UPLOAD_DIR / f"preview_{uuid.uuid4().hex}_{file.filename}"
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        temp = PREV_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+        with open(temp, "wb") as buf: shutil.copyfileobj(file.file, buf)
 
-        # Load image and apply transparent background onto specified color
-        with Image.open(input_path).convert("RGBA") as img:
-            bg_rgba = (255, 255, 255, 255) if bg_color == "white" else (0, 0, 0, 255)
-            background = Image.new("RGBA", img.size, bg_rgba)
-            composited = Image.alpha_composite(background, img)
-            grayscale = ImageOps.grayscale(composited)
+        # composite over bg & grayscale
+        with Image.open(temp).convert("RGBA") as im:
+            bg_rgba = (255,255,255,255) if bg_color=="white" else (0,0,0,255)
+            base = Image.new("RGBA", im.size, bg_rgba)
+            gray = ImageOps.grayscale(Image.alpha_composite(base, im))
 
-        # Save grayscale
-        gray_path = input_path.with_suffix(".gray.png")
-        grayscale.save(gray_path)
+        gpath = temp.with_suffix(".gray.png"); gray.save(gpath)
 
-        # Generate depth map
-        depth_array = generate_depth_map(gray_path)
-        depth_normalized = cv2.normalize(depth_array, None, 0, 255, cv2.NORM_MINMAX)
-        depth_uint8 = depth_normalized.astype(np.uint8)
-        depth_png_path = input_path.with_suffix(".depth.png")
-        cv2.imwrite(str(depth_png_path), depth_uint8)
+        depth = generate_depth_map(gpath, res)
+        depth = np.clip(depth*255 + brightness, 0, 255).astype(np.uint8)
+        depth = (np.power(depth/255.0, gamma)*255).astype(np.uint8)
 
-        return {
-            "grayscale_url": f"/download/{gray_path.name}",
-            "depth_url": f"/download/{depth_png_path.name}"
-        }
+        dpath = temp.with_suffix(".depth.png"); cv2.imwrite(str(dpath), depth)
+
+        return {"grayscale_url": f"/download/{gpath.name}",
+                "depth_url":      f"/download/{dpath.name}"}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Depth map preview failed: {str(e)}")
+        raise HTTPException(500, f"Preview failed: {e}")
+
+# ────────────────────────────────────────────────
+# export endpoint
+# ────────────────────────────────────────────────
+@app.post("/upload-and-export/{format}/")
+async def export(
+    format: str,
+    file: UploadFile = File(...),
+    depth_scale: float = Query(1.0),
+    brightness: int = Query(0),
+    gamma: float = Query(1.0),
+    res: int = Query(512, ge=128, le=1024),
+):
+    format = format.lower()
+    if format not in {"dxf","stl","obj"}:
+        raise HTTPException(400, "Unsupported format")
+
+    fpath = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+    with open(fpath, "wb") as buf: shutil.copyfileobj(file.file, buf)
+
+    gray = convert_to_grayscale(fpath)
+    no_bg = remove_background(gray)
+    depth = generate_depth_map(no_bg, res) * depth_scale
+
+    depth = np.clip(depth*255 + brightness, 0, 255).astype(np.uint8)
+    depth = (np.power(depth/255.0, gamma)*255).astype(np.uint8)
+    depth = cv2.normalize(depth, None, 0.0, 1.0, cv2.NORM_MINMAX)
+
+    pts   = depth_to_points(depth)
+    faces = grid_faces(*depth.shape)
+
+    out = UPLOAD_DIR / f"{fpath.stem}.{format}"
+    try:
+        if format=="dxf": save_as_dxf(pts, out)
+        elif format=="stl": save_as_stl(pts, faces, out)
+        else: OBJExporter(pts.tolist(), faces).save(str(out))
+    except Exception as e:
+        raise HTTPException(500, f"Export failed: {e}")
+
+    return {"message":f"{format.upper()} exported", "file":f"/download/{out.name}"}
+
+# ────────────────────────────────────────────────
+# download helper
+# ────────────────────────────────────────────────
+@app.get("/download/{fname}")
+def dl(fname:str):
+    p= (UPLOAD_DIR/fname) if (UPLOAD_DIR/fname).exists() else (PREV_DIR/fname)
+    if not p.exists(): raise HTTPException(404,"File not found")
+    return FileResponse(p, filename=fname)
 

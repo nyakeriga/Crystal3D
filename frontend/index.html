@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CrystalCraft3D</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: linear-gradient(to bottom right, #0f172a, #1e293b);
+    }
+  </style>
   <script defer>
     function enterApp() {
       document.getElementById('loginScreen').classList.add('hidden');
@@ -15,80 +21,137 @@
       const fileInput = document.getElementById("fileInput");
       const formatSelect = document.getElementById("formatSelect");
       const bgSelect = document.getElementById("bgSelect");
+      const depthIntensityInput = document.getElementById("depthIntensity");
+      const bgThresholdInput = document.getElementById("bgThreshold");
+      const crystalSizeInput = document.getElementById("crystalSize");
+
       const grayscalePreview = document.getElementById("grayscalePreview");
       const grayscaleContainer = document.getElementById("grayscalePreviewContainer");
       const depthPreview = document.getElementById("depthPreview");
       const depthContainer = document.getElementById("depthPreviewContainer");
+
       const responseContainer = document.getElementById("responseContainer");
       const downloadLink = document.getElementById("downloadLink");
+      const submitButton = uploadForm.querySelector("button[type='submit']");
+
+      const showMessage = (msg, color = "blue") => {
+        responseContainer.innerHTML = `<p class="text-${color}-400 font-semibold">${msg}</p>`;
+        responseContainer.classList.remove("hidden");
+      };
+
+      const hideMessage = () => {
+        responseContainer.innerHTML = "";
+        responseContainer.classList.add("hidden");
+      };
+
+      const hidePreviews = () => {
+        grayscaleContainer.classList.add("hidden");
+        depthContainer.classList.add("hidden");
+      };
+
+      const showPreviews = (grayscaleURL, depthURL) => {
+        grayscalePreview.src = grayscaleURL;
+        depthPreview.src = depthURL;
+        grayscaleContainer.classList.remove("hidden");
+        depthContainer.classList.remove("hidden");
+      };
+
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files[0];
+        const bgColor = bgSelect.value;
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          showMessage("Generating depth map preview...", "blue");
+          const response = await fetch(`/preview-depthmap?bg_color=${bgColor}`, {
+            method: "POST",
+            body: formData,
+          });
+
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Preview failed");
+          showPreviews(result.grayscale_url, result.depth_url);
+          hideMessage();
+        } catch (err) {
+          console.error("Preview error:", err);
+          showMessage(`Preview Error: ${err.message}`, "red");
+          hidePreviews();
+        }
+      });
 
       uploadForm.addEventListener("submit", async (e) => {
         e.preventDefault();
 
         const file = fileInput.files[0];
         const format = formatSelect.value;
-        const bg = bgSelect.value;
+        const bgColor = bgSelect.value;
+        const depthIntensity = depthIntensityInput.value;
+        const bgThreshold = bgThresholdInput.value;
+        const crystalSize = crystalSizeInput.value;
 
-        if (!file) return alert("Please upload an image.");
+        if (!file || !format) {
+          showMessage("Please select an image and format.", "red");
+          return;
+        }
 
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("depth_intensity", depthIntensity);
+        formData.append("bg_threshold", bgThreshold);
+        formData.append("crystal_size", crystalSize);
+        formData.append("bg_color", bgColor);
+
+        showMessage("Processing your 3D model...");
+        downloadLink.classList.add("hidden");
+        submitButton.disabled = true;
+        submitButton.textContent = "Processing...";
 
         try {
-          // Show preview
-          const previewRes = await fetch(`/preview-depthmap?bg_color=${bg}`, {
+          const response = await fetch(`/upload-and-export/${format}/`, {
             method: "POST",
             body: formData,
           });
 
-          const previewData = await previewRes.json();
-          grayscalePreview.src = previewData.grayscale_url;
-          depthPreview.src = previewData.depth_url;
-          grayscaleContainer.classList.remove("hidden");
-          depthContainer.classList.remove("hidden");
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Export failed");
 
-          // Generate model
-          const exportRes = await fetch(`/upload-and-export/${format}/`, {
-            method: "POST",
-            body: formData,
-          });
-
-          const exportData = await exportRes.json();
-          downloadLink.href = exportData.file;
-          downloadLink.style.display = "inline-block";
-          responseContainer.classList.remove("hidden");
-
+          showMessage("Export successful! Your 3D model is ready.", "green");
+          downloadLink.href = result.file;
+          downloadLink.classList.remove("hidden");
         } catch (err) {
-          console.error(err);
-          alert("Something went wrong. Check the console for details.");
+          console.error("Export error:", err);
+          showMessage(`Error: ${err.message}`, "red");
+        } finally {
+          submitButton.disabled = false;
+          submitButton.textContent = "Generate 3D Model";
         }
       });
     });
   </script>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body class="bg-gray-100 text-gray-800">
-  <div class="min-h-screen flex flex-col items-center justify-center px-4">
-    <!-- Login Screen -->
-    <div id="loginScreen" class="max-w-sm w-full bg-white shadow-md rounded-xl p-6 text-center">
-      <h2 class="text-2xl font-bold text-blue-600 mb-4">Welcome to CrystalCraft</h2>
-      <p class="text-sm text-gray-500 mb-6">Please click below to access the 3D Export Tool.</p>
-      <button onclick="enterApp()" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Enter</button>
+<body class="text-white font-sans">
+  <div class="min-h-screen flex flex-col items-center justify-center p-4">
+    <div id="loginScreen" class="text-center space-y-6 bg-white/10 rounded-xl p-8 backdrop-blur-md shadow-xl">
+      <h1 class="text-4xl font-bold text-cyan-300">CrystalCraft3D</h1>
+      <p class="text-gray-200 text-sm">Click below to enter the 3D engraving export tool</p>
+      <button onclick="enterApp()" class="bg-gradient-to-r from-blue-500 to-teal-400 text-white px-6 py-2 rounded-xl shadow hover:scale-105 transition">Enter</button>
     </div>
 
-    <!-- Main App -->
-    <div id="appScreen" class="hidden max-w-xl w-full bg-white shadow-xl rounded-2xl p-8">
-      <h1 class="text-3xl font-bold text-center text-blue-600 mb-6">CrystalCraft3D Export Tool</h1>
+    <div id="appScreen" class="hidden max-w-xl w-full bg-white/10 shadow-2xl rounded-2xl p-8 backdrop-blur-lg mt-6">
+      <h2 class="text-3xl font-bold text-teal-300 text-center mb-6">CrystalCraft3D Export Tool</h2>
 
       <form id="uploadForm" class="space-y-4">
         <label class="block">
-          <span class="block text-gray-700 font-semibold">Upload Image</span>
-          <input type="file" name="file" id="fileInput" accept="image/*" required class="mt-2 block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700">
+          <span class="block font-semibold">Upload Image</span>
+          <input type="file" id="fileInput" accept="image/*" required class="mt-1 w-full p-2 bg-white text-black rounded-md" />
         </label>
 
         <label class="block">
-          <span class="block text-gray-700 font-semibold">Select Export Format</span>
-          <select id="formatSelect" class="mt-2 w-full p-2 border rounded-md">
+          <span class="block font-semibold">Export Format</span>
+          <select id="formatSelect" class="mt-1 w-full p-2 rounded-md text-black">
             <option value="stl">STL</option>
             <option value="obj">OBJ</option>
             <option value="dxf">DXF</option>
@@ -96,29 +159,43 @@
         </label>
 
         <label class="block">
-          <span class="block text-gray-700 font-semibold">Select Background Type</span>
-          <select id="bgSelect" class="mt-2 w-full p-2 border rounded-md">
+          <span class="block font-semibold">Background Type</span>
+          <select id="bgSelect" class="mt-1 w-full p-2 rounded-md text-black">
             <option value="white">White</option>
             <option value="black">Black</option>
           </select>
         </label>
 
+        <label class="block">
+          <span class="block font-semibold">Depth Intensity (0.1–5.0)</span>
+          <input type="number" id="depthIntensity" value="1.0" step="0.1" min="0.1" max="5.0" class="mt-1 w-full p-2 rounded-md text-black" />
+        </label>
+
+        <label class="block">
+          <span class="block font-semibold">Background Threshold (0.0–1.0)</span>
+          <input type="number" id="bgThreshold" value="0.5" step="0.05" min="0.0" max="1.0" class="mt-1 w-full p-2 rounded-md text-black" />
+        </label>
+
+        <label class="block">
+          <span class="block font-semibold">Crystal Size (e.g., 50x60x100)</span>
+          <input type="text" id="crystalSize" value="50x50x50" class="mt-1 w-full p-2 rounded-md text-black" />
+        </label>
+
         <div id="grayscalePreviewContainer" class="hidden mt-4">
-          <h3 class="text-lg font-semibold mb-2 text-gray-700">Grayscale Preview</h3>
-          <img id="grayscalePreview" src="" alt="Grayscale Preview" class="w-full rounded shadow-md border" />
+          <h3 class="font-semibold text-sm mb-1">Grayscale Preview</h3>
+          <img id="grayscalePreview" src="" alt="Grayscale Preview" class="rounded shadow-md border w-full" />
         </div>
 
         <div id="depthPreviewContainer" class="hidden mt-4">
-          <h3 class="text-lg font-semibold mb-2 text-gray-700">Depth Map Preview</h3>
-          <img id="depthPreview" src="" alt="Depth Map Preview" class="w-full rounded shadow-md border" />
+          <h3 class="font-semibold text-sm mb-1">Depth Map Preview</h3>
+          <img id="depthPreview" src="" alt="Depth Map Preview" class="rounded shadow-md border w-full" />
         </div>
 
-        <button type="submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Generate 3D Model</button>
+        <button type="submit" class="w-full bg-gradient-to-r from-cyan-500 to-blue-500 text-white font-bold py-2 px-4 rounded-xl shadow hover:scale-105 transition">Generate 3D Model</button>
       </form>
 
-      <div id="responseContainer" class="mt-6 hidden">
-        <p class="text-green-600 font-semibold">Export successful!</p>
-        <a id="downloadLink" href="#" download class="inline-block mt-2 bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded shadow">Download 3D Model</a>
+      <div id="responseContainer" class="mt-6 hidden text-center">
+        <a id="downloadLink" href="#" download class="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded shadow inline-block">Download 3D Model</a>
       </div>
     </div>
   </div>

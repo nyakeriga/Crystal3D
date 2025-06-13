@@ -1,90 +1,72 @@
+<script defer>
+/* >>> change this if the backend URL/port is different in prod <<< */
+const API_BASE = "http://localhost:8000";
+
 document.addEventListener("DOMContentLoaded", () => {
-  const uploadForm = document.getElementById("uploadForm");
-  const fileInput = document.getElementById("fileInput");
-  const formatSelect = document.getElementById("formatSelect");
-  const messageDiv = document.getElementById("responseContainer");
-  const downloadLink = document.getElementById("downloadLink");
-  const depthPreview = document.getElementById("depthPreview");
-  const depthPreviewContainer = document.getElementById("depthPreviewContainer");
-  const grayscalePreview = document.getElementById("grayscalePreview");
-  const grayscalePreviewContainer = document.getElementById("grayscalePreviewContainer");
-  const submitButton = uploadForm.querySelector("button[type='submit']");
+  // Elements
+  const $ = id => document.getElementById(id);
+  const form          = $("uploadForm");
+  const fileInput     = $("fileInput");
+  const fmtSelect     = $("formatSelect");
+  const bgSelect      = $("bgSelect");
+  const depthInt      = $("depthIntensity");
+  const bgThresh      = $("bgThreshold");
+  const crystSize     = $("crystalSize");
 
-  // Preview grayscale and depth map
-  fileInput.addEventListener("change", async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
+  const msgBox   = $("responseContainer");
+  const dlLink   = $("downloadLink");
+  const btn      = form.querySelector("button[type='submit']");
 
-    const formData = new FormData();
-    formData.append("file", file);
+  const gPrev    = $("grayscalePreview"), gWrap=$("grayscalePreviewContainer");
+  const dPrev    = $("depthPreview"),     dWrap=$("depthPreviewContainer");
 
-    try {
-      const response = await fetch("/preview-depthmap", {
-        method: "POST",
-        body: formData,
-      });
+  // ─── helpers ────────────────────────────────────────────────
+  const showMsg = (txt,col="blue")=>{
+    msgBox.innerHTML=`<p class="text-${col}-600 font-semibold">${txt}</p>`;
+    msgBox.classList.remove("hidden");
+  };
+  const hideMsg = ()=>msgBox.classList.add("hidden");
+  const hidePrev = ()=>{gWrap.classList.add("hidden");dWrap.classList.add("hidden");};
 
-      if (!response.ok) throw new Error("Failed to generate depth map preview");
-
-      const result = await response.json();
-
-      grayscalePreview.src = result.grayscale_url;
-      grayscalePreviewContainer.classList.remove("hidden");
-
-      depthPreview.src = result.depth_url;
-      depthPreviewContainer.classList.remove("hidden");
-
-    } catch (err) {
-      console.error("Depth map preview error:", err.message);
-      grayscalePreviewContainer.classList.add("hidden");
-      depthPreviewContainer.classList.add("hidden");
-    }
+  // ─── preview on image change ────────────────────────────────
+  fileInput.addEventListener("change", async ()=>{
+    const file=fileInput.files[0]; if(!file) return;
+    const fd=new FormData(); fd.append("file",file);
+    const url=`${API_BASE}/preview-depthmap?bg_color=${bgSelect.value}`;
+    try{
+      showMsg("Generating depth‑map preview…");
+      const r=await fetch(url,{method:"POST",body:fd});
+      if(!r.ok) throw new Error(await r.text());
+      const j=await r.json();
+      gPrev.src=`${API_BASE}${j.grayscale_url}`;
+      dPrev.src=`${API_BASE}${j.depth_url}`;
+      gWrap.classList.remove("hidden"); dWrap.classList.remove("hidden");
+      hideMsg();
+    }catch(e){console.error(e);showMsg(`Preview error: ${e.message}`,"red");hidePrev();}
   });
 
-  // Handle upload and export
-  uploadForm.addEventListener("submit", async (e) => {
+  // ─── upload & export ────────────────────────────────────────
+  form.addEventListener("submit", async e=>{
     e.preventDefault();
+    const file=fileInput.files[0]; if(!file) return showMsg("Choose an image","red");
+    const fd=new FormData();
+    fd.append("file",file);
+    fd.append("depth_intensity",depthInt.value);
+    fd.append("bg_threshold",bgThresh.value);
+    fd.append("crystal_size",crystSize.value);
 
-    const file = fileInput.files[0];
-    const format = formatSelect.value;
-
-    if (!file || !format) {
-      messageDiv.innerHTML = `<p class="text-red-600">Please select a file and a format.</p>`;
-      messageDiv.classList.remove("hidden");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    messageDiv.innerHTML = `<p class="text-blue-600">Uploading and processing file...</p>`;
-    messageDiv.classList.remove("hidden");
-    downloadLink.classList.add("hidden");
-    submitButton.disabled = true;
-    submitButton.textContent = "Processing...";
-
-    try {
-      const response = await fetch(`/upload-and-export/${format}/`, {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-
-      if (response.ok) {
-        messageDiv.innerHTML = `<p class="text-green-600 font-semibold">${result.message}</p>`;
-        downloadLink.href = result.file;
-        downloadLink.classList.remove("hidden");
-      } else {
-        throw new Error(result.detail || "Unknown error occurred.");
-      }
-
-    } catch (error) {
-      messageDiv.innerHTML = `<p class="text-red-600">Error: ${error.message}</p>`;
-    } finally {
-      submitButton.disabled = false;
-      submitButton.textContent = "Generate 3D Model";
-    }
+    const url=`${API_BASE}/upload-and-export/${fmtSelect.value}/`;
+    try{
+      btn.disabled=true; btn.textContent="Processing…"; showMsg("Exporting…");
+      const r=await fetch(url,{method:"POST",body:fd});
+      if(!r.ok) throw new Error(await r.text());
+      const j=await r.json();
+      dlLink.href   = `${API_BASE}${j.file}`;
+      dlLink.classList.remove("hidden");
+      showMsg(j.message || "3D model ready!","green");
+    }catch(e){console.error(e);showMsg(`Export error: ${e.message}`,"red"); dlLink.classList.add("hidden");}
+    finally{btn.disabled=false;btn.textContent="Generate 3D Model";}
   });
 });
+</script>
 
